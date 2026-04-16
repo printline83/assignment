@@ -24,7 +24,7 @@ defined('BASEPATH') || exit('No direct script access allowed');
 | a PHP script and you can easily do that on your own.
 |
 */
-$config['base_url'] = 'http://localhost';
+$config['base_url'] = 'http://localhost:8080';
 
 /*
 |--------------------------------------------------------------------------
@@ -445,6 +445,9 @@ $config['csrf_cookie_name']  = 'CK';
 $config['csrf_expire']       = 7200;
 $config['csrf_regenerate']   = false;
 $config['csrf_exclude_uris'] = [
+    'api/products',
+    'api/reserve',
+    'api/payment'
 ];
 /*
 |--------------------------------------------------------------------------

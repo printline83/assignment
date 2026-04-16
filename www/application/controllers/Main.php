@@ -49,5 +49,29 @@ class Main extends CI_Controller
 
     public function index()
     {
+        $this->products();
+    }
+
+    public function products()
+    {
+        $this->load->view('main/main_products');
+    }
+
+    public function reserve($params = [])
+    {
+        $data['product_id'] = isset($params[0]) ? $params[0] : '';
+        if (!$data['product_id']) {
+            alert('상품 정보가 없습니다.');
+        }
+        $this->load->view('main/main_reserve', $data);
+    }
+
+    public function payment()
+    {
+        $data['reservation_id'] = isset($_GET['reservation_id']) ? $_GET['reservation_id'] : '';
+        if (!$data['reservation_id']) {
+            alert('정상적인 접근이 아닙니다.');
+        }
+        $this->load->view('main/main_payment', $data);
     }
 }
