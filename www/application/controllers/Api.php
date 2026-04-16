@@ -71,7 +71,7 @@ class Api extends CI_Controller
     {
         $a_post['v_ProductId'] = $this->input->post('productId');
         $a_post['v_UserName']  = $this->input->post('userName');
-        $a_post['v_UserPhone'] = uncomma($this->input->post('userPhone'));
+        $a_post['v_UserPhone'] = $this->input->post('userPhone');
 
         if (!$a_post['v_ProductId'] || !$a_post['v_UserName'] || !$a_post['v_UserPhone']) {
             return $this->_response(400, 'error', '필수 항목이 누락되었습니다.');
@@ -84,5 +84,82 @@ class Api extends CI_Controller
         }
 
         return $this->_response(200, 'success', $res['data']);
+    }
+
+    // 결제창 진입 직전 유효성 검사
+    public function check_validity()
+    {
+        $reservation_id = $this->input->post('reservation_id');
+        if (!$reservation_id) {
+            return $this->_response(400, 'error', '예약 번호가 없습니다.');
+        }
+
+        $isValid = $this->mdl_api->check_reservation_validity($reservation_id);
+        if ($isValid) {
+            return $this->_response(200, 'success', []);
+        } else {
+            return $this->_response(400, 'error', '결제 유효 시간이 이미 초과되었거나 결제할 수 없는 상태입니다.');
+        }
+    }
+
+    // 결제 성공 콜백 (Toss Redirect)
+    public function payment_success()
+    {
+        $this->load->library('session');
+        $paymentKey = $this->input->get('paymentKey');
+        $orderId    = $this->input->get('orderId');
+        $amount     = $this->input->get('amount');
+
+        if (!$paymentKey || !$orderId || !$amount) {
+            $this->session->set_flashdata('payment_status', 'fail');
+            $this->session->set_flashdata('payment_message', '잘못된 결제 접근입니다.');
+            header('Location: /main/payment_result');
+            exit;
+        }
+
+        $res = $this->mdl_api->confirm_payment($paymentKey, $orderId, $amount);
+
+        if ($res['status']) {
+            $this->session->set_flashdata('payment_status', 'success');
+            $this->session->set_flashdata('reservation_id', $orderId);
+        } else {
+            $this->session->set_flashdata('payment_status', 'fail');
+            $this->session->set_flashdata('payment_message', $res['message']);
+        }
+        header('Location: /main/payment_result');
+        exit;
+    }
+
+    // 결제 실패 콜백 (Toss Redirect)
+    public function payment_fail()
+    {
+        $this->load->library('session');
+        $msg     = $this->input->get('message');
+        $orderId = $this->input->get('orderId');
+
+        if (!$msg) {
+            $msg = '사용자 취소 또는 결제 에러가 발생했습니다.';
+        }
+        
+        // 하드 에러의 경우 즉시 재고 복구를 위해 예약을 취소합니다.
+        if ($orderId) {
+            $this->mdl_api->cancel_reservation($orderId);
+        }
+
+        $this->session->set_flashdata('payment_status', 'fail');
+        $this->session->set_flashdata('payment_message', htmlspecialchars($msg, ENT_QUOTES, 'UTF-8'));
+        header('Location: /main/payment_result');
+        exit;
+    }
+
+    // 결제 포기 API (프론트에서 직접 호출)
+    public function cancel_payment()
+    {
+        $reservation_id = $this->input->post('reservation_id');
+        if ($reservation_id) {
+            $this->mdl_api->cancel_reservation($reservation_id);
+        }
+
+        return $this->_response(200, 'success', []);
     }
 }

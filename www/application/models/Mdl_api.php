@@ -8,8 +8,9 @@ class Mdl_api extends CI_Model
 
     public function get_products()
     {
-        $a_products = $this->db->get_where(PD_INFO, [
-            'f_Delete' => 'N',
+        $this->db->select('A.*, (SELECT COUNT(*) FROM '.RS_INFO." B WHERE B.f_ProductId = A.f_ProductId AND B.f_Status = 'ED' AND B.f_ExpiredAt > NOW()) AS f_PendingCount", false);
+        $a_products = $this->db->get_where(PD_INFO.' A', [
+            'A.f_Delete' => 'N',
         ])->result_array();
 
         return query_array($a_products);
@@ -132,6 +133,7 @@ class Mdl_api extends CI_Model
             'f_UserName'      => $a_prm['v_UserName'],
             'f_UserPhone'     => $a_prm['v_UserPhone'],
             'f_Amount'        => $a_product['f_Price'],
+            'f_ProductName'   => $a_product['f_ProductName'],
             'f_Status'        => 'ED',
             'f_CreatedAt'     => date('Y-m-d H:i:s'),
             'f_ExpiredAt'     => $v_ExpireAt
@@ -150,8 +152,156 @@ class Mdl_api extends CI_Model
             'status' => true,
             'data'   => [
                 'v_ReservationId' => $v_ReservationId,
-                'v_ExpireAt'      => $v_ExpireAt
+                'v_ExpireAt'      => $v_ExpireAt,
+                'v_Amount'        => $a_product['f_Price'],
+                'v_OrderName'     => $a_product['f_ProductName']
             ]
         ];
+    }
+
+    public function confirm_payment($paymentKey, $orderId, $amount)
+    {
+        $secretKey = 'test_sk_Lex6BJGQOVDnYxAwgvJ8W4w2zNbg';
+        $url       = 'https://api.tosspayments.com/v1/payments/confirm';
+
+        $data = [
+            'paymentKey' => $paymentKey,
+            'orderId'    => $orderId,
+            'amount'     => $amount
+        ];
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: Basic '.base64_encode($secretKey.':'),
+            'Content-Type: application/json'
+        ]);
+
+        $response  = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $resData = json_decode($response, true);
+
+        if ($http_code == 200) {
+            $this->db->trans_begin();
+
+            // 예약 상태 원자적 업데이트 (결제 금액 무결성 방어 포함)
+            $this->db->where('f_ReservationId', $orderId);
+            $this->db->where('f_Status', 'ED');
+            $this->db->where('f_Amount', $amount); // 금액 위변조 방지
+            $this->db->set('f_Status', 'CF');
+            $this->db->update(RS_INFO);
+
+            if ($this->db->affected_rows() == 0) {
+                // 이미 만료되었거나 중간에 금액을 변조한 경우 방어 (Toss 결제망 단에서 부분취소 발생 필요하나 생략)
+                $this->db->trans_rollback();
+
+                // 예약 취소 처리
+                $this->cancel_reservation($orderId);
+
+                return ['status' => false, 'message' => '유효하지 않은 예약이거나 이미 만료되었습니다. 결제 금액 불일치일 수 있습니다.'];
+            }
+
+            // t_Payments 결제 이력 저장
+            $this->db->insert(PY_INFO, [
+                'f_ReservationId'  => $orderId,
+                'f_IdempotencyKey' => $paymentKey, // PG사의 고유 키를 중복 방지용으로 사용
+                'f_Amount'         => $amount,
+                'f_Status'         => 'SS', // 성공 (Success)
+                'f_TransactionId'  => $paymentKey,
+                'f_CreatedAt'      => date('Y-m-d H:i:s')
+            ]);
+            
+            if ($this->db->trans_status() === false) {
+                $this->db->trans_rollback();
+
+                return ['status' => false, 'message' => '내부 시스템 오류로 결제 승인 처리에 실패했습니다.'];
+            }
+            
+            $this->db->trans_commit();
+
+            return ['status' => true, 'data' => $resData];
+        } else {
+            return ['status' => false, 'message' => isset($resData['message']) ? $resData['message'] : '결제 승인에 실패했습니다.'];
+        }
+    }
+
+    public function cancel_reservation($v_ReservationId, $v_Status = 'CX')
+    {
+        // 1. 단일 조회 (락 없음, 상품ID 확보 목적)
+        $row = $this->db->select('f_ProductId, f_Status')->where('f_ReservationId', $v_ReservationId)->get(RS_INFO)->row_array();
+        
+        if (empty($row) || $row['f_Status'] !== 'ED') {
+            return false;
+        }
+
+        $v_ProductId = $row['f_ProductId'];
+
+        $this->db->trans_begin();
+
+        // 2. 상품 테이블 락 획득 (예약 생성 시의 락 획득 순서와 동일하게 맞춰 데드락 방지)
+        $product_query = $this->db->query('SELECT f_ProductId FROM '.PD_INFO.' WHERE f_ProductId = ? FOR UPDATE', [$v_ProductId]);
+        
+        if ($product_query->num_rows() === 0) {
+            $this->db->trans_rollback();
+
+            return false;
+        }
+
+        // 3. 상태 취소(EX) 처리 (동시성에 의해 이미 취소/승인 처리되었는지 다시 확인)
+        $this->db->where('f_ReservationId', $v_ReservationId);
+        $this->db->where('f_Status', 'ED');
+        $this->db->set('f_Status', $v_Status);
+        $this->db->update(RS_INFO);
+        
+        if ($this->db->affected_rows() > 0) {
+            // 4. 제품 재고 +1 즉시 복구
+            $this->db->where('f_ProductId', $v_ProductId);
+            $this->db->set('f_Stock', 'f_Stock + 1', false);
+            $this->db->update(PD_INFO);
+        } else {
+            // 이미 다른 프로세스(백그라운드 등)에 의해 처리되었을 경우 안전하게 롤백
+            $this->db->trans_rollback();
+
+            return false;
+        }
+
+        if ($this->db->trans_status() === false) {
+            $this->db->trans_rollback();
+
+            return false;
+        }
+
+        $this->db->trans_commit();
+
+        return true;
+    }
+
+    public function check_reservation_validity($v_ReservationId)
+    {
+        $this->db->select('f_Status, f_ExpiredAt');
+        $this->db->where('f_ReservationId', $v_ReservationId);
+        $row = $this->db->get(RS_INFO)->row_array();
+
+        if (empty($row)) {
+            return false;
+        }
+        if ($row['f_Status'] !== 'ED') {
+            return false;
+        }
+        
+        // 현재 시간이 만료 시간을 지났는지 확인
+        if (strtotime($row['f_ExpiredAt']) < time()) {
+            // 유효 시간이 넘은 경우 즉각 취소(재고 복구) 로직 실행
+            $this->cancel_reservation($v_ReservationId, 'EX');
+
+            return false;
+        }
+
+        return true;
     }
 } // class Mdl_api

@@ -54,13 +54,21 @@ $(document).ready(function() {
 
         products.forEach(function(p) {
             const isSoldOut = parseInt(p.Stock) <= 0;
-            const btnHtml = isSoldOut 
-                ? `<button class="btn btn-secondary btn-reserve" disabled>품절</button>`
-                : `<button class="btn btn-primary btn-reserve" onclick="location.href='/main/reserve/${p.ProductId}'">예약하기</button>`;
-            
-            const stockHtml = isSoldOut 
-                ? `<span class="text-danger"><i class="fas fa-times-circle"></i> 품절</span>` 
-                : `<span><i class="fas fa-box"></i> 남은 재고: ${p.Stock}개</span>`;
+            const isPending = parseInt(p.PendingCount) > 0;
+
+            let btnHtml = '';
+            let stockHtml = '';
+
+            if (isSoldOut && isPending) {
+                btnHtml = `<button class="btn btn-warning btn-reserve text-dark fw-bold" disabled>결제 진행중</button>`;
+                stockHtml = `<span class="text-warning fw-bold"><i class="fas fa-hourglass-half"></i> 결제 진행중</span>`;
+            } else if (isSoldOut) {
+                btnHtml = `<button class="btn btn-secondary btn-reserve" disabled>품절</button>`;
+                stockHtml = `<span class="text-danger"><i class="fas fa-times-circle"></i> 품절</span>`;
+            } else {
+                btnHtml = `<button class="btn btn-primary btn-reserve" onclick="location.href='/main/reserve/${p.ProductId}'">예약하기</button>`;
+                stockHtml = `<span><i class="fas fa-box"></i> 남은 재고: ${p.Stock}개</span>`;
+            }
 
             $list.append(`
               <div class="product-item">
@@ -137,8 +145,8 @@ $(document).ready(function() {
             success: function(response) {
                 $('.page_loader').removeClass('loading');
                 if (response.status === 'success') {
-                    alert('예약 대기가 성공적으로 처리되었습니다!\n예약번호: ' + response.data.v_ReservationId);
-                    location.href = '/main/products';
+                    alert('예약이 접수되었습니다. 결제 페이지로 이동합니다.');
+                    location.href = '/main/payment?reservation_id=' + response.data.v_ReservationId;
                 }
             },
             error: function(xhr) {
@@ -152,6 +160,83 @@ $(document).ready(function() {
             }
         });
     });
- 
+
+    // Toss 결제창 호출 (main_payment.php 폼 이벤트)
+    if ($('#paymentForm').length > 0) {
+        $('#paymentForm').on('submit', function(e) {
+            e.preventDefault();
+            
+            var reservationId = $('#paymentReservationId').val();
+            var amount = $('#paymentAmount').val();
+            var orderName = $('#paymentOrderName').val();
+            var userName = $('#paymentUserName').val();
+
+            $('.page_loader').addClass('loading');
+
+            // 토스 결제창 띄우기 전, 서버에 결제 유효기간 및 상태 체크
+            $.ajax({
+                url: '/api/check_validity',
+                type: 'POST',
+                data: { reservation_id: reservationId },
+                dataType: 'json',
+                success: function(response) {
+                    $('.page_loader').removeClass('loading');
+                    
+                    if (response.status === 'success') {
+                        var tossPayments = TossPayments('test_ck_Z0RnYX2w532nKeAyllM3NeyqApQE');
+                        tossPayments.requestPayment('카드', {
+                            amount: amount,
+                            orderId: reservationId,
+                            orderName: orderName,
+                            customerName: userName,
+                            successUrl: window.location.origin + '/api/payment_success',
+                            failUrl: window.location.origin + '/api/payment_fail'
+                        }).catch(function(err) {
+                            if (err.code === 'USER_CANCEL') {
+                                alert('결제가 취소되었습니다.');
+                            } else {
+                                alert('결제창 호출 에러: ' + err.message);
+                            }
+                        });
+                    }
+                },
+                error: function(xhr) {
+                    $('.page_loader').removeClass('loading');
+                    var msg = '예약 상태 확인 중 오류가 발생했습니다.';
+                    if (xhr.responseJSON && xhr.responseJSON.message) {
+                        msg = xhr.responseJSON.message;
+                    }
+                    alert(msg);
+                    location.href = '/main/products';
+                }
+            });
+        });
+
+        // 결제 포기 버튼 이벤트
+        $('#btnCancelPayment').on('click', function() {
+            if (confirm('정말로 결제를 포기하시겠습니까? (예약 내역이 취소되어 다른 사람이 즉시 구매할 수 있게 됩니다.)')) {
+                var reservationId = $('#paymentReservationId').val();
+                
+                $('.page_loader').addClass('loading');
+                $.ajax({
+                    url: '/api/cancel_payment',
+                    type: 'POST',
+                    data: { reservation_id: reservationId },
+                    dataType: 'json',
+                    success: function() {
+                        $('.page_loader').removeClass('loading');
+                        alert('결제가 포기되어 예약이 취소되었습니다.');
+                        location.href = '/main/products';
+                    },
+                    error: function() {
+                        $('.page_loader').removeClass('loading');
+                        alert('오류가 발생했습니다.');
+                        location.href = '/main/products';
+                    }
+                });
+            }
+        });
+    }
+
 });
 
