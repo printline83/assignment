@@ -6,6 +6,7 @@ class Mdl_api extends CI_Model
         parent::__construct();
     }
 
+    // 전체 상품 목록 및 현재 결제 대기 중인 수량 정보 조회
     public function get_products()
     {
         $this->db->select('A.*, (SELECT COUNT(*) FROM '.RS_INFO." B WHERE B.f_ProductId = A.f_ProductId AND B.f_Status = 'ED' AND B.f_ExpiredAt > NOW()) AS f_PendingCount", false);
@@ -16,6 +17,7 @@ class Mdl_api extends CI_Model
         return query_array($a_products);
     }
 
+    // 특정 상품의 상세 정보 및 재고 유무 확인
     public function get_product($v_ProductId)
     {
         $a_product = $this->db->get_where(PD_INFO, [
@@ -27,6 +29,7 @@ class Mdl_api extends CI_Model
         return query_row($a_product);
     }
 
+    // 예약(주문) 생성: 비관적 락을 통한 재고 선차감 및 10분 유효 시간 부여
     public function create_reservation($a_prm)
     {
         $this->db->trans_begin();
@@ -159,6 +162,7 @@ class Mdl_api extends CI_Model
         ];
     }
 
+    // 토스 페이먼츠 결제 승인 확인 및 최종 상태 업데이트 (성공 시 PY_INFO 기록)
     public function confirm_payment($paymentKey, $orderId, $amount)
     {
         $secretKey = 'test_sk_Lex6BJGQOVDnYxAwgvJ8W4w2zNbg';
@@ -235,6 +239,7 @@ class Mdl_api extends CI_Model
         }
     }
 
+    // 토스 페이먼츠 API를 통한 실제 승인 취소(환불) 요청 처리
     private function _cancel_toss_payment($paymentKey, $cancelReason)
     {
         $secretKey = 'test_sk_Lex6BJGQOVDnYxAwgvJ8W4w2zNbg';
@@ -261,6 +266,7 @@ class Mdl_api extends CI_Model
     }
 
     // 능동적 결제 취소 및 환불 로직
+    // 결제 완료된 주문에 대한 전액 환불 및 재고 복구 처리
     public function refund_payment($v_ReservationId)
     {
         // 1. 성공한 결제 내역 조회
@@ -312,6 +318,7 @@ class Mdl_api extends CI_Model
         return ['status' => true];
     }
 
+    // 결제 대기 중인 예약에 대한 취소(포기) 및 재고 복구 처리
     public function cancel_reservation($v_ReservationId, $v_Status = 'CX')
     {
         $this->db->trans_begin();
@@ -335,12 +342,8 @@ class Mdl_api extends CI_Model
 
         return true;
     }
-
-    /**
-     * [_core_cancel_and_restore_stock]
-     * 예약 상태의 원자적 변경과 상품 재고 환원을 담당하는 핵심 공통 로직입니다.
-     * 비관적 락(FOR UPDATE)을 사용하여 동시성 문제를 방어합니다.
-     */
+ 
+    // 취소 및 환불 시 공통적으로 사용되는 예약 상태 변경과 재고 환원 핵심 로직
     private function _core_cancel_and_restore_stock($v_ReservationId, $v_RequiredPrevStatus, $v_TargetStatus)
     {
         // 1. 상품ID 및 현재 상태 확인 (락을 걸기 전 가벼운 체크)
@@ -375,6 +378,7 @@ class Mdl_api extends CI_Model
         return false;
     }
 
+    // 결제창 진입 전 예약의 유효성(상태, 시간) 검사 및 만료 시 자동 취소
     public function check_reservation_validity($v_ReservationId)
     {
         $this->db->select('f_Status, f_ExpiredAt');
