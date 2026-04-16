@@ -1,4 +1,4 @@
-<div class="container py-4 mx-auto" style="max-width: 600px;">
+<div class="container py-4 mx-auto max-w-600">
     <h3 class="mb-4 fw-bold text-center">상품 예약</h3>
     
     <div class="card border-0 shadow-sm">
