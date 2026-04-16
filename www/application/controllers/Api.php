@@ -50,18 +50,39 @@ class Api extends CI_Controller
     public function products()
     {
         $a_products = $this->mdl_api->get_products();
+
         return $this->_response(200, 'success', $a_products);
     }
 
     // 상품 정보
-    public function product($params)
+    public function product($v_ProductId)
     {
-        $a_product = $this->mdl_api->get_product($params);
+        $a_product = $this->mdl_api->get_product($v_ProductId);
 
         if (empty($a_product)) {
             return $this->_response(404, 'error', '상품을 찾을 수 없습니다.');
         }
 
         return $this->_response(200, 'success', $a_product);
+    }
+
+    // 예약 처리
+    public function reserve()
+    {
+        $a_post['v_ProductId'] = $this->input->post('productId');
+        $a_post['v_UserName']  = $this->input->post('userName');
+        $a_post['v_UserPhone'] = uncomma($this->input->post('userPhone'));
+
+        if (!$a_post['v_ProductId'] || !$a_post['v_UserName'] || !$a_post['v_UserPhone']) {
+            return $this->_response(400, 'error', '필수 항목이 누락되었습니다.');
+        }
+
+        $res = $this->mdl_api->create_reservation($a_post);
+
+        if (!$res['status']) {
+            return $this->_response(409, 'error', $res['message']); // 409 Conflict
+        }
+
+        return $this->_response(200, 'success', $res['data']);
     }
 }

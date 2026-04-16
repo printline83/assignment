@@ -111,7 +111,47 @@ $(document).ready(function() {
         });
     }
 
-     
+    $('#reservationForm').on('submit', function(e) {
+        e.preventDefault();
+        
+        const productId = $('#reserveProductId').val();
+        const userName = $('#userName').val();
+        const userPhone = $('#userPhone').val();
+
+        if (!userName || !userPhone) {
+            alert('예약자 정보를 모두 입력해주세요.');
+            return;
+        }
+
+        $('.page_loader').addClass('loading');
+
+        $.ajax({
+            url: '/api/reserve',
+            type: 'POST',
+            data: {
+                productId: productId,
+                userName: userName,
+                userPhone: uncomma(userPhone)
+            },
+            dataType: 'json',
+            success: function(response) {
+                $('.page_loader').removeClass('loading');
+                if (response.status === 'success') {
+                    alert('예약 대기가 성공적으로 처리되었습니다!\n예약번호: ' + response.data.v_ReservationId);
+                    location.href = '/main/products';
+                }
+            },
+            error: function(xhr) {
+                $('.page_loader').removeClass('loading');
+                const res = xhr.responseJSON;
+                if (res && res.message) {
+                    alert(res.message);
+                } else {
+                    alert('예약 처리 중 통신 오류가 발생했습니다.');
+                }
+            }
+        });
+    });
  
 });
 

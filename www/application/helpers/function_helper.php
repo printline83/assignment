@@ -151,6 +151,18 @@ if (!function_exists('comma')) {
     }
 }
 
+if ( ! function_exists('generate_res_id')) {
+    function generate_res_id() {
+        $prefix = 'R' . date('ymd'); // 년월일
+        $characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        $random_string = '';
+        for ($i = 0; $i < 5; $i++) {
+            $random_string .= $characters[rand(0, strlen($characters) - 1)];
+        }
+        return $prefix . '-' . $random_string;
+    }
+}
+
 // 콤마 제거
 if (!function_exists('uncomma')) {
     function uncomma($number)
