@@ -8,8 +8,8 @@ function minifier()
     $minify = new lessc();
 
     // Less
-    $minify->compileFile(FCPATH.'www/assets/css/style.less', FCPATH.'www/assets/css/style.css', FCPATH.'www/assets/css/style.min.css');
+    // $minify->compileFile(FCPATH.'www/assets/css/style.less', FCPATH.'www/assets/css/style.css', FCPATH.'www/assets/css/style.min.css');
 
     // js
-    $minify->new_jsMinify(FCPATH.'www/assets/js/script.js', FCPATH.'www/assets/js/script.min.js');
+    // $minify->new_jsMinify(FCPATH.'www/assets/js/script.js', FCPATH.'www/assets/js/script.min.js');
 }

@@ -162,4 +162,21 @@ class Api extends CI_Controller
 
         return $this->_response(200, 'success', []);
     }
+
+    // 능동적 전액 환불 API (결제 완료 후 취소처리)
+    public function refund_payment()
+    {
+        $reservation_id = $this->input->post('reservation_id');
+        if (!$reservation_id) {
+            return $this->_response(400, 'error', '예약 번호가 없습니다.');
+        }
+
+        $res = $this->mdl_api->refund_payment($reservation_id);
+        
+        if ($res['status']) {
+            return $this->_response(200, 'success', []);
+        } else {
+            return $this->_response(400, 'error', $res['message']);
+        }
+    }
 }

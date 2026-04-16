@@ -449,7 +449,8 @@ $config['csrf_exclude_uris'] = [
     'api/reserve',
     'api/payment',
     'api/cancel_payment',
-    'api/check_validity'
+    'api/check_validity',
+    'api/refund_payment'
 ];
 /*
 |--------------------------------------------------------------------------

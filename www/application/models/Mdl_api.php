@@ -203,23 +203,28 @@ class Mdl_api extends CI_Model
                 // 예약 취소 처리
                 $this->cancel_reservation($orderId);
 
-                return ['status' => false, 'message' => '유효하지 않은 예약이거나 이미 만료되었습니다. 결제 금액 불일치일 수 있습니다.'];
+                // 에러 상황이므로 기승인된 결제 실매입건을 토스망에 즉시 취소(환불) 요청
+                $this->_cancel_toss_payment($paymentKey, '결제 금액 위변조 감지 또는 예약 시간 만료');
+
+                return ['status' => false, 'message' => '유효하지 않은 예약이거나 이미 만료되었습니다. 결제가 즉시 자동 취소되었습니다.'];
             }
 
             // t_Payments 결제 이력 저장
             $this->db->insert(PY_INFO, [
                 'f_ReservationId'  => $orderId,
-                'f_IdempotencyKey' => $paymentKey, // PG사의 고유 키를 중복 방지용으로 사용
                 'f_Amount'         => $amount,
                 'f_Status'         => 'SS', // 성공 (Success)
-                'f_TransactionId'  => $paymentKey,
+                'f_TransactionId'  => $paymentKey, // PG사 승인번호 (Unique 제약조건으로 중복 방지)
                 'f_CreatedAt'      => date('Y-m-d H:i:s')
             ]);
             
             if ($this->db->trans_status() === false) {
                 $this->db->trans_rollback();
 
-                return ['status' => false, 'message' => '내부 시스템 오류로 결제 승인 처리에 실패했습니다.'];
+                // DB 삽입 실패 등 시스템 에러 시 기승인된 결제 환불 처리
+                $this->_cancel_toss_payment($paymentKey, '내부 서버 시스템 오류로 인한 결제 롤백');
+
+                return ['status' => false, 'message' => '내부 시스템 오류로 결제 승인 처리에 실패하여 자동 환불 처리되었습니다.'];
             }
             
             $this->db->trans_commit();
@@ -230,41 +235,91 @@ class Mdl_api extends CI_Model
         }
     }
 
-    public function cancel_reservation($v_ReservationId, $v_Status = 'CX')
+    private function _cancel_toss_payment($paymentKey, $cancelReason)
     {
-        // 1. 단일 조회 (락 없음, 상품ID 확보 목적)
-        $row = $this->db->select('f_ProductId, f_Status')->where('f_ReservationId', $v_ReservationId)->get(RS_INFO)->row_array();
+        $secretKey = 'test_sk_Lex6BJGQOVDnYxAwgvJ8W4w2zNbg';
+        $url       = 'https://api.tosspayments.com/v1/payments/'.$paymentKey.'/cancel';
+
+        $data = ['cancelReason' => $cancelReason];
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: Basic '.base64_encode($secretKey.':'),
+            'Content-Type: application/json'
+        ]);
+
+        $response  = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
         
-        if (empty($row) || $row['f_Status'] !== 'ED') {
-            return false;
+        // HTTP 200 이면 성공
+        return $http_code == 200;
+    }
+
+    // 능동적 결제 취소 및 환불 로직
+    public function refund_payment($v_ReservationId)
+    {
+        // 1. 성공한 결제 내역 조회
+        $payment = $this->db->where('f_ReservationId', $v_ReservationId)
+                            ->where('f_Status', 'SS')
+                            ->get(PY_INFO)->row_array();
+        
+        if (empty($payment)) {
+            return ['status' => false, 'message' => '취소할 수 있는 유효한 결제 내역을 찾을 수 없습니다.'];
         }
 
-        $v_ProductId = $row['f_ProductId'];
+        $res_row = $this->db->select('f_ProductId')->where('f_ReservationId', $v_ReservationId)->get(RS_INFO)->row();
+        if (empty($res_row)) {
+            return ['status' => false, 'message' => '예약 정보를 찾을 수 없습니다.'];
+        }
+        $v_ProductId = $res_row->f_ProductId;
 
         $this->db->trans_begin();
 
-        // 2. 상품 테이블 락 획득 (예약 생성 시의 락 획득 순서와 동일하게 맞춰 데드락 방지)
-        $product_query = $this->db->query('SELECT f_ProductId FROM '.PD_INFO.' WHERE f_ProductId = ? FOR UPDATE', [$v_ProductId]);
+        // [공통 로직] 예약 상태 변경 및 재고 복구 시도 (CF -> CX)
+        $b_core_success = $this->_core_cancel_and_restore_stock($v_ReservationId, 'CF', 'CX');
         
-        if ($product_query->num_rows() === 0) {
+        if ($b_core_success) {
+            // 4. 페이먼트 이력(PY_INFO) 취소 상태로 변경
+            $this->db->where('f_PaymentId', $payment['f_PaymentId'])->set('f_Status', 'CX')->update(PY_INFO);
+
+            // 5. 실제 토스망 API 취소 (실패 시 전체 Rollback 처리하여 정합성 유지)
+            $toss_cancel = $this->_cancel_toss_payment($payment['f_TransactionId'], '고객 단순 변심 취소');
+            if (!$toss_cancel) {
+                // 토스 망 에러/기취소 방어
+                $this->db->trans_rollback();
+
+                return ['status' => false, 'message' => '토스 PG사 연동 취소에 실패했습니다. (이미 취소된 거래일 수 있습니다.)'];
+            }
+        } else {
             $this->db->trans_rollback();
 
-            return false;
+            return ['status' => false, 'message' => '이미 취소되었거나 환불이 불가한 예약 상태입니다.'];
         }
 
-        // 3. 상태 취소(EX) 처리 (동시성에 의해 이미 취소/승인 처리되었는지 다시 확인)
-        $this->db->where('f_ReservationId', $v_ReservationId);
-        $this->db->where('f_Status', 'ED');
-        $this->db->set('f_Status', $v_Status);
-        $this->db->update(RS_INFO);
-        
-        if ($this->db->affected_rows() > 0) {
-            // 4. 제품 재고 +1 즉시 복구
-            $this->db->where('f_ProductId', $v_ProductId);
-            $this->db->set('f_Stock', 'f_Stock + 1', false);
-            $this->db->update(PD_INFO);
-        } else {
-            // 이미 다른 프로세스(백그라운드 등)에 의해 처리되었을 경우 안전하게 롤백
+        if ($this->db->trans_status() === false) {
+            $this->db->trans_rollback();
+
+            return ['status' => false, 'message' => '시스템 오류로 환불에 실패했습니다.'];
+        }
+
+        $this->db->trans_commit();
+
+        return ['status' => true];
+    }
+
+    public function cancel_reservation($v_ReservationId, $v_Status = 'CX')
+    {
+        $this->db->trans_begin();
+
+        // [공통 로직] 예약 상태 변경 및 재고 복구 시도 (ED -> $v_Status)
+        $success = $this->_core_cancel_and_restore_stock($v_ReservationId, 'ED', $v_Status);
+
+        if (!$success) {
             $this->db->trans_rollback();
 
             return false;
@@ -279,6 +334,45 @@ class Mdl_api extends CI_Model
         $this->db->trans_commit();
 
         return true;
+    }
+
+    /**
+     * [_core_cancel_and_restore_stock]
+     * 예약 상태의 원자적 변경과 상품 재고 환원을 담당하는 핵심 공통 로직입니다.
+     * 비관적 락(FOR UPDATE)을 사용하여 동시성 문제를 방어합니다.
+     */
+    private function _core_cancel_and_restore_stock($v_ReservationId, $v_RequiredPrevStatus, $v_TargetStatus)
+    {
+        // 1. 상품ID 및 현재 상태 확인 (락을 걸기 전 가벼운 체크)
+        $row = $this->db->select('f_ProductId, f_Status')
+                        ->where('f_ReservationId', $v_ReservationId)
+                        ->get(RS_INFO)->row_array();
+        
+        if (empty($row) || $row['f_Status'] !== $v_RequiredPrevStatus) {
+            return false;
+        }
+
+        $v_ProductId = $row['f_ProductId'];
+
+        // 2. 상품 테이블 락 획득 (데드락 방지를 위해 항상 예약 생성 시와 동일한 순서로 Product 락 선획득)
+        $this->db->query('SELECT f_ProductId FROM '.PD_INFO.' WHERE f_ProductId = ? FOR UPDATE', [$v_ProductId]);
+        
+        // 3. 예약 상태 업데이트 (그 사이에 누군가 처리했을 수 있으므로 다시 한번 상태 조건 체크)
+        $this->db->where('f_ReservationId', $v_ReservationId);
+        $this->db->where('f_Status', $v_RequiredPrevStatus);
+        $this->db->set('f_Status', $v_TargetStatus);
+        $this->db->update(RS_INFO);
+        
+        if ($this->db->affected_rows() > 0) {
+            // 4. 제품 재고 +1 즉시 복구
+            $this->db->where('f_ProductId', $v_ProductId);
+            $this->db->set('f_Stock', 'f_Stock + 1', false);
+            $this->db->update(PD_INFO);
+
+            return true;
+        }
+
+        return false;
     }
 
     public function check_reservation_validity($v_ReservationId)

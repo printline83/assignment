@@ -7,8 +7,9 @@
                 </div>
                 <h3 class="fw-bold mb-3">결제가 완료되었습니다!</h3>
                 <p class="text-muted mb-4 fs-5">예약 번호: <strong class="text-dark">#<?=$reservation_id?></strong></p>
-                <div class="d-grid mt-4">
+                <div class="d-grid mt-4 gap-2">
                     <button class="btn btn-dark btn-lg fw-bold" onclick="location.href='/main/products'">메인으로 돌아가기</button>
+                    <button class="btn btn-outline-danger btn-lg fw-bold" onclick="refundPayment('<?=$reservation_id?>')">결제 취소 (전액 환불)</button>
                 </div>
             </div>
         </div>

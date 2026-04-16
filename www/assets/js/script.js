@@ -154,8 +154,10 @@ $(document).ready(function() {
                 const res = xhr.responseJSON;
                 if (res && res.message) {
                     alert(res.message);
+                    location.href = '/main/products';
                 } else {
                     alert('예약 처리 중 통신 오류가 발생했습니다.');
+                    location.href = '/main/products';
                 }
             }
         });
@@ -240,3 +242,30 @@ $(document).ready(function() {
 
 });
 
+// 결제 완료창 내 결제취소(환불) 로직
+window.refundPayment = function(reservationId) {
+    if (confirm('정말로 결제를 취소하시겠습니까? 토스 카드 전액 환불 및 주문이 취소됩니다.')) {
+        $('.page_loader').addClass('loading');
+        $.ajax({
+            url: '/api/refund_payment',
+            type: 'POST',
+            data: { reservation_id: reservationId },
+            dataType: 'json',
+            success: function(response) {
+                $('.page_loader').removeClass('loading');
+                if (response.status === 'success') {
+                    alert('결제가 성공적으로 취소/환불되었습니다.');
+                    location.href = '/main/products';
+                }
+            },
+            error: function(xhr) {
+                $('.page_loader').removeClass('loading');
+                var msg = '환불 처리 중 오류가 발생했습니다.';
+                if (xhr.responseJSON && xhr.responseJSON.message) {
+                    msg = xhr.responseJSON.message;
+                }
+                alert(msg);
+            }
+        });
+    }
+};
