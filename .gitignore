@@ -1,0 +1,24 @@
+
+ 
+# 환경 설정
+.env*
+
+# IDE 설정 파일
+.vscode/
+.idea/
+
+# Composer 관련
+/vendor/ 
+composer.lock
+
+# OS 관련
+.DS_Store
+Thumbs.db
+
+# 기타 백업/임시 파일
+*.bak
+*.tmp
+*.swp
+*.swo
+*.orig
+ 
