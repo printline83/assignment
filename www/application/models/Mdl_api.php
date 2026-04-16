@@ -201,13 +201,16 @@ class Mdl_api extends CI_Model
             $this->db->update(RS_INFO);
 
             if ($this->db->affected_rows() == 0) {
-                // 이미 만료되었거나 중간에 금액을 변조한 경우 방어 (Toss 결제망 단에서 부분취소 발생 필요하나 생략)
                 $this->db->trans_rollback();
 
-                // 예약 취소 처리
-                $this->cancel_reservation($orderId);
+                // 중복 호출 대응 (Idempotency): 이미 성공 처리된 건이라면 정상 응답을 반환하여 중복 취소를 방지함
+                $check = $this->db->select('f_Status')->where('f_ReservationId', $orderId)->get(RS_INFO)->row_array();
+                if (!empty($check) && $check['f_Status'] === 'CF') {
+                    return ['status' => true, 'data' => $resData];
+                }
 
-                // 에러 상황이므로 기승인된 결제 실매입건을 토스망에 즉시 취소(환불) 요청
+                // 진짜 만료되었거나 금액 위변조가 발생한 경우에만 취소 프로세스 진행
+                $this->cancel_reservation($orderId);
                 $this->_cancel_toss_payment($paymentKey, '결제 금액 위변조 감지 또는 예약 시간 만료');
 
                 return ['status' => false, 'message' => '유효하지 않은 예약이거나 이미 만료되었습니다. 결제가 즉시 자동 취소되었습니다.'];
